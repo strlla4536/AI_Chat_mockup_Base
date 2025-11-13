@@ -8,3 +8,7 @@ redis>=5.0.1
 requests>=2.31.0
 html2text>=2020.1.16
 lxml>=4.9.3
+langchain>=0.2.0
+langchain-openai>=0.1.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
