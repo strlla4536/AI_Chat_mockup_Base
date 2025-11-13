@@ -12,6 +12,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - PORT=6666
       - DOCKER_ENV=1
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
     volumes:
       - chat_data:/data
     depends_on:

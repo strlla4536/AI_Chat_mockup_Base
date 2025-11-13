@@ -52,7 +52,6 @@ class ChatHistoryStore:
                     chat_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    tool_call_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (chat_id) REFERENCES chat_sessions(chat_id)
                 )
@@ -86,7 +85,7 @@ class ChatHistoryStore:
             offset = max(0, total_count - limit)
             
             cursor.execute('''
-                SELECT role, content, tool_call_id, created_at
+                SELECT id, role, content, created_at
                 FROM chat_messages
                 WHERE chat_id = ?
                 ORDER BY id ASC
@@ -94,14 +93,16 @@ class ChatHistoryStore:
             ''', (chat_id, limit, offset))
             
             messages = []
-            for row in cursor.fetchall():
-                role, content, tool_call_id, created_at = row
+            rows = cursor.fetchall()
+
+            for row in rows:
+                # row: id, role, content, created_at
+                _id, role, content, created_at = row
                 msg = {
+                    "id": _id,
                     "role": role,
                     "content": content
                 }
-                if tool_call_id:
-                    msg["tool_call_id"] = tool_call_id
                 messages.append(msg)
             
             conn.close()
@@ -110,7 +111,7 @@ class ChatHistoryStore:
             log.error(f"Failed to get chat history: {e}")
             return []
     
-    async def save_message(self, chat_id: str, role: str, content: str, tool_call_id: Optional[str] = None) -> bool:
+    async def save_message(self, chat_id: str, role: str, content: str) -> bool:
         """메시지 저장"""
         try:
             conn = sqlite3.connect(self.db_path)
@@ -126,9 +127,9 @@ class ChatHistoryStore:
             
             # 메시지 저장
             cursor.execute('''
-                INSERT INTO chat_messages (chat_id, role, content, tool_call_id)
-                VALUES (?, ?, ?, ?)
-            ''', (chat_id, role, content, tool_call_id))
+                INSERT INTO chat_messages (chat_id, role, content)
+                VALUES (?, ?, ?)
+            ''', (chat_id, role, content))
             
             # 세션 업데이트 시간 갱신
             cursor.execute('''
@@ -160,12 +161,11 @@ class ChatHistoryStore:
             for msg in messages:
                 role = msg.get('role')
                 content = msg.get('content', '')
-                tool_call_id = msg.get('tool_call_id')
                 
                 cursor.execute('''
-                    INSERT INTO chat_messages (chat_id, role, content, tool_call_id)
-                    VALUES (?, ?, ?, ?)
-                ''', (chat_id, role, content, tool_call_id))
+                    INSERT INTO chat_messages (chat_id, role, content)
+                    VALUES (?, ?, ?)
+                ''', (chat_id, role, content))
             
             # 세션 업데이트 시간 갱신
             cursor.execute('''

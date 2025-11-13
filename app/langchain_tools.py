@@ -1,7 +1,7 @@
 """
 기존 도구들을 LangChain Tool로 래핑하는 모듈
 """
-from langchain_core.tools import tool
+ # langchain_core.tools import 제거 (불필요)
 from typing import Optional, List
 import json
 
@@ -14,7 +14,6 @@ from app.logger import get_logger
 log = get_logger(__name__)
 
 
-@tool
 async def search_web(
     search_query: List[dict],
     response_length: str = "medium"
@@ -32,13 +31,16 @@ async def search_web(
     try:
         states = States()
         result = await web_search_func(states=states, search_query=search_query, response_length=response_length)
-        return str(result) if result else "검색 결과가 없습니다."
+        # result is a list of structured items; return as dict for caller
+        if result:
+            log.info("search_web executed", extra={"count": len(result), "queries": [q.get('q') for q in search_query]})
+            return {"results": result}
+        return {"results": []}
     except Exception as e:
         log.error(f"Search failed: {e}")
-        return f"검색 중 오류가 발생했습니다: {str(e)}"
+        return {"error": f"검색 중 오류가 발생했습니다: {str(e)}"}
 
 
-@tool
 async def open_url(
     id: Optional[str] = None,
     loc: int = -1,
@@ -64,7 +66,6 @@ async def open_url(
         return f"URL 열기 중 오류가 발생했습니다: {str(e)}"
 
 
-@tool
 async def manage_memory(
     mode: str,
     content: Optional[str] = None,
@@ -92,8 +93,8 @@ async def manage_memory(
 
 def get_langchain_tools():
     """모든 LangChain Tool 반환"""
-    return [
-        search_web,
-        open_url,
-        manage_memory,
-    ]
+    return {
+        "search": search_web,
+        "open": open_url,
+        "memory": manage_memory,
+    }

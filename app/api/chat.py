@@ -157,6 +157,7 @@ async def chat_stream(
                         
                         try:
                             tool_res = tool_map[tool_name](states, **tool_args)
+                            # emit visible query for search tools
                             if tool_name == "search":
                                 await emit("agentFlowExecutedData", {
                                     "nodeLabel": "Visible Query Generator",
@@ -192,6 +193,49 @@ async def chat_stream(
 
                             if asyncio.iscoroutine(tool_res):
                                 tool_res = await tool_res
+
+                            # If search tool returned structured results, emit them and a log event
+                            if tool_name == "search":
+                                try:
+                                    # tool_res expected to be a dict like {"results": [...]}
+                                    results = None
+                                    if isinstance(tool_res, dict) and "results" in tool_res:
+                                        results = tool_res.get("results")
+                                    elif isinstance(tool_res, list):
+                                        results = tool_res
+                                    elif isinstance(tool_res, str):
+                                        # try to parse JSON
+                                        try:
+                                            parsed = json.loads(tool_res)
+                                            results = parsed.get("results") if isinstance(parsed, dict) else parsed
+                                        except Exception:
+                                            results = None
+
+                                    if results:
+                                        # Emit agent flow node with search results (titles + sources)
+                                        await emit("agentFlowExecutedData", {
+                                            "nodeLabel": "Search Results",
+                                            "data": {
+                                                "output": {
+                                                    "content": json.dumps({
+                                                        "visible_search_results": [
+                                                            {"id": r.get("id"), "title": r.get("title"), "source": r.get("source"), "url": r.get("url")}
+                                                            for r in results
+                                                        ]
+                                                    }, ensure_ascii=False)
+                                                }
+                                            }
+                                        })
+
+                                        # Also emit a tool_log event so frontend can display full snippets
+                                        await emit("tool_log", {
+                                            "tool": "search",
+                                            "results": results
+                                        })
+
+                                        log.info("search tool executed", extra={"chat_id": chat_id, "count": len(results)})
+                                except Exception as e:
+                                    log.exception("failed to emit search results", extra={"chat_id": chat_id})
                         except Exception as e:
                             log.exception("tool call failed", extra={"chat_id": chat_id, "tool_name": tool_name})
                             tool_res = f"Error calling {tool_name}: {e}\n\nTry again with different arguments."
@@ -298,18 +342,28 @@ async def chat_multiturn(
             # 사용자 입력 첫 토큰
             await emit("token", "")
             
+            streamed_text: list[str] = []
+
+            async def handle_token(token: str):
+                if not token:
+                    return
+                streamed_text.append(token)
+                await emit("token", token)
+
             try:
-                # Agent로 메시지 처리
+                # Agent로 메시지 처리 (토큰 스트리밍 포함)
                 response, metadata = await agent.process_message(
                     user_input=req.question,
                     chat_id=chat_id,
-                    user_id=user_id
+                    user_id=user_id,
+                    on_token=handle_token
                 )
-                
-                # 응답 토큰 스트리밍 (한 글자씩)
-                for char in response:
-                    await emit("token", char)
-                
+
+                # 콜백이 호출되지 않은 경우를 대비한 폴백 처리
+                if not streamed_text and response:
+                    for char in response:
+                        await emit("token", char)
+
                 # 메타데이터 전달
                 await emit("metadata", metadata)
                 

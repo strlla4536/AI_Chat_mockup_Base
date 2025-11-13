@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from app.utils import States
+from app.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class SingleSearchModel(BaseModel):
@@ -48,13 +51,14 @@ WEB_SEARCH = {
 async def web_search(
     states: States,
     **tool_input
-) -> str:
+) -> list:
     
     try:
         tool_input = MultipleSearchModel(**tool_input)
     except Exception as e:
         return f"Error validating `web_search`: {e}"
 
+    log.info("web_search called", extra={"query": [sq.q for sq in tool_input.search_query] if hasattr(tool_input, 'search_query') else None})
     async with aiohttp.ClientSession() as session:
         tasks = [
             single_search(
@@ -68,20 +72,23 @@ async def web_search(
         results = await asyncio.gather(*tasks)
     
     flatted_res = [item for sublist in results for item in sublist]
-    
+
     outputs = []
     for idx, item in enumerate(flatted_res):
         id = f'{states.turn}:{idx}'
         states.tool_state.id_to_url[id] = item['url']
         outputs.append({'id': id, **item})
-    
+
     states.turn += 1
-    
-    return "\n".join([
-        f'- 【{item["id"]}†{item["title"]}†{item["source"]}】: {item["date"]} — {item["snippet"]}' if item['date'] else
-        f'- 【{item["id"]}†{item["title"]}†{item["source"]}】: {item["snippet"]}'
-        for item in outputs
-    ])
+
+    # Log structured results
+    try:
+        log.info("web_search results", extra={"results": outputs})
+    except Exception:
+        log.info("web_search results (non-serializable)")
+
+    # Return structured list of results for callers to handle
+    return outputs
 
 
 async def single_search(
@@ -91,37 +98,34 @@ async def single_search(
     domains: list[str] | None, 
     response_length: Literal["short", "medium", "long"]
 ):
-    url = "https://www.searchapi.io/api/v1/search"
+    # Tavily API only
+    tavily_api_key = os.getenv("TAVILY_API_KEY")
+    url = "https://api.tavily.com/search"
 
-    if domains:
-        q = f"{q} site:{' OR site:'.join(domains)}"
-    
-    if response_length not in {"short", "medium", "long"}:
-        raise ValueError("response_length must be 'short'|'medium'|'long'")
-    
     size_map = {"short": 3, "medium": 5, "long": 7}
-    
     num = size_map[response_length]
-    params = {
-        "engine": "google",
-        "api_key": os.getenv("SEARCHAPI_KEY"),
-        "q": q,
-        "num": num
+
+    payload = {
+        "query": q,
+        "api_key": tavily_api_key,
+        "max_results": num,
+        "include_domains": domains if domains else None,
+        "recency_days": recency if recency else None
     }
 
-    if recency:
-        params["time_period_min"] = (datetime.now() - timedelta(days=recency)).strftime("%m/%d/%Y")
+    # Remove None values
+    payload = {k: v for k, v in payload.items() if v is not None}
 
-    async with session.get(url, params=params) as resp:
+    async with session.post(url, json=payload) as resp:
         resp.raise_for_status()
         data = await resp.json()
-        organic_results = data.get('organic_results', [])
+        results = data.get("results", [])
         return [
             {
-                "title": item['title'],
-                "url": item['link'],
-                "snippet": item['snippet'],
-                "source": item['source'],
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "snippet": item.get("snippet", ""),
+                "source": item.get("source", "tavily"),
                 "date": item.get("date", None)
-            } for item in organic_results
+            } for item in results
         ]
