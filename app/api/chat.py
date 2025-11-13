@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import re
 from datetime import datetime
 from uuid import uuid4
@@ -12,7 +11,6 @@ from pydantic import BaseModel, ConfigDict
 from app.utils import (
     call_llm_stream, 
     is_sse, 
-    is_valid_model, 
     ROOT_DIR, 
     States
 )
@@ -56,6 +54,11 @@ async def chat_stream(
             await queue.put(": keep-alive\n\n")
 
     async def runner():
+        # 변수 초기화 (예외 발생 시에도 finally에서 사용할 수 있도록)
+        states = None
+        chat_id = None
+        history = []
+        
         try:
             states = States()
             chat_id = req.chatId or uuid4().hex
@@ -68,18 +71,9 @@ async def chat_stream(
                 current_date=datetime.now().strftime("%Y-%m-%d"),
                 locale="ko-KR"
             )
-
-            model = os.getenv("DEFAULT_MODEL")
-            llm_regex = re.compile(r"<llm>(.*?)</llm>")
-            llm_match = llm_regex.search(req.question)
-            if llm_match:
-                log.info("model override detected", extra={"chat_id": chat_id, "model": model})
-                model = llm_match.group(1)
-                if not is_valid_model(model):
-                    model = os.getenv("DEFAULT_MODEL")
-                    log.warning("model not found", extra={"chat_id": chat_id, "model": model})
-                req.question = llm_regex.sub("", req.question).strip()
             
+            # model_set_context 초기화 (user_id가 없어도 사용할 수 있도록)
+            model_set_context = []
             if states.user_id:
                 model_set_context_list = await store.get_messages(states.user_id)
                 if model_set_context_list:
@@ -87,8 +81,6 @@ async def chat_stream(
                             "role": "system",
                             "content": "### User Memory\n" + "\n".join([f"{idx}. {msc}" for idx, msc in enumerate(model_set_context_list,   start=1)])
                         }]
-                else:
-                    model_set_context = []
             
             persisted = (await store.get_messages(chat_id)) or []
             history = [
@@ -107,90 +99,127 @@ async def chat_stream(
             while True:
                 if client_disconnected.is_set():
                     break
+                
                 await emit("tool_state", states.tool_state.model_dump())
+                
+                # 최종 메시지를 저장할 변수
+                final_message = None
+                
+                # 스트림 처리
                 async for res in call_llm_stream(
                     messages=states.messages,
                     tools=states.tools,
-                    temperature=0.2,
-                    model=model
+                    temperature=0.2
                 ):
                     if is_sse(res):
+                        # SSE 이벤트 (토큰 등)는 즉시 emit
                         await emit(res["event"], res["data"])
                     else:
-                        states.messages.append(res)
-
-                tool_calls = res.get("tool_calls")
-                contents = res.get("content")
+                        # 최종 메시지는 나중에 처리하기 위해 저장
+                        final_message = res
+                
+                # 최종 메시지가 없으면 루프 종료
+                if final_message is None:
+                    break
+                
+                # 최종 메시지를 states.messages에 추가
+                states.messages.append(final_message)
+                
+                # tool_calls와 content 확인
+                tool_calls = final_message.get("tool_calls") or []
+                contents = final_message.get("content", "")
+                
                 # 툴 호출이 없고 콘텐츠가 있으면 종료
                 if not tool_calls and contents:
                     break
                 # 툴 호출이 없고 콘텐츠가 없으면 다시 인퍼런스 시도
                 elif not tool_calls and not contents:
                     continue
+                
                 # 툴 호출이 있으면 툴 호출 처리
-                for tool_call in tool_calls:
-                    tool_name = tool_call['function']['name']
-                    tool_args = json.loads(tool_call['function']['arguments'])
-                    log.info("tool call", extra={"chat_id": chat_id, "tool_name": tool_name})
-                    
-                    try:
-                        tool_res = tool_map[tool_name](states, **tool_args)
-                        if tool_name == "search":
-                            await emit("agentFlowExecutedData", {
-                                "nodeLabel": "Visible Query Generator",
-                                "data": {
-                                    "output": {
-                                        "content": json.dumps({
-                                            "visible_web_search_query": [sq['q'] for sq in tool_args['search_query']]
-                                        }, ensure_ascii=False)
-                                    }
-                                }
-                            })
-                        elif tool_name == "open":
-                            try:
-                                if tool_args.get('id') and tool_args['id'].startswith('http'):
-                                    url = tool_args['id']
-                                elif tool_args.get('id') is None:
-                                    url = getattr(states.tool_state, "current_url", None)
-                                else:
-                                    url = states.tool_state.id_to_url.get(tool_args['id'])
-                                if url:
-                                    await emit("agentFlowExecutedData", {
-                                        "nodeLabel": "Visible URL",
-                                        "data": {
-                                            "output": {
-                                                "content": json.dumps({
-                                                    "visible_url": url
-                                                }, ensure_ascii=False)
-                                            }
+                if tool_calls:
+                    for tool_call in tool_calls:
+                        tool_name = tool_call.get('function', {}).get('name')
+                        if not tool_name:
+                            log.warning("tool call에 name이 없음", extra={"chat_id": chat_id, "tool_call": tool_call})
+                            continue
+                        
+                        try:
+                            tool_args_str = tool_call.get('function', {}).get('arguments', '{}')
+                            tool_args = json.loads(tool_args_str) if tool_args_str else {}
+                        except json.JSONDecodeError as e:
+                            log.exception("tool arguments JSON 파싱 실패", extra={"chat_id": chat_id, "tool_name": tool_name, "arguments": tool_args_str})
+                            tool_args = {}
+                        
+                        log.info("tool call", extra={"chat_id": chat_id, "tool_name": tool_name})
+                        
+                        try:
+                            tool_res = tool_map[tool_name](states, **tool_args)
+                            if tool_name == "search":
+                                await emit("agentFlowExecutedData", {
+                                    "nodeLabel": "Visible Query Generator",
+                                    "data": {
+                                        "output": {
+                                            "content": json.dumps({
+                                                "visible_web_search_query": [sq.get('q', '') for sq in tool_args.get('search_query', [])]
+                                            }, ensure_ascii=False)
                                         }
-                                    })
-                            except Exception as e:
-                                pass
+                                    }
+                                })
+                            elif tool_name == "open":
+                                try:
+                                    if tool_args.get('id') and tool_args['id'].startswith('http'):
+                                        url = tool_args['id']
+                                    elif tool_args.get('id') is None:
+                                        url = getattr(states.tool_state, "current_url", None)
+                                    else:
+                                        url = states.tool_state.id_to_url.get(tool_args['id'])
+                                    if url:
+                                        await emit("agentFlowExecutedData", {
+                                            "nodeLabel": "Visible URL",
+                                            "data": {
+                                                "output": {
+                                                    "content": json.dumps({
+                                                        "visible_url": url
+                                                    }, ensure_ascii=False)
+                                                }
+                                            }
+                                        })
+                                except Exception as e:
+                                    log.exception("open tool emit 실패", extra={"chat_id": chat_id})
 
-                        if asyncio.iscoroutine(tool_res):
-                            tool_res = await tool_res
-                    except Exception as e:
-                        log.exception("tool call failed", extra={"chat_id": chat_id, "tool_name": tool_name})
-                        tool_res = f"Error calling {tool_name}: {e}\n\nTry again with different arguments."
-                    
-                    states.messages.append({"role": "tool", "content": str(tool_res), "tool_call_id": tool_call['id']})
+                            if asyncio.iscoroutine(tool_res):
+                                tool_res = await tool_res
+                        except Exception as e:
+                            log.exception("tool call failed", extra={"chat_id": chat_id, "tool_name": tool_name})
+                            tool_res = f"Error calling {tool_name}: {e}\n\nTry again with different arguments."
+                        
+                        tool_call_id = tool_call.get('id', '')
+                        states.messages.append({"role": "tool", "content": str(tool_res), "tool_call_id": tool_call_id})
 
         except Exception as e:
             log.exception("chat stream failed")
             await emit("error", str(e))
             await emit("token", f"\n\n오류가 발생했습니다: {e}")
         finally:
-            last_message = states.messages[-1]
+            # states와 history가 정의되어 있고 유효한 경우에만 메시지 저장
+            try:
+                if states and hasattr(states, 'messages') and states.messages and chat_id:
+                    last_message = states.messages[-1]
+                    
+                    if isinstance(last_message, dict) and last_message.get("role") == "assistant":
+                        content = last_message.get("content", "")
+                        if isinstance(content, str):
+                            content = re.sub(r"【[^】]*】", "", content).strip()
+                            last_message = {**last_message, "content": content}
+                    
+                    # history에 마지막 메시지 추가하고 저장
+                    if history:
+                        history.append(last_message)
+                        await store.save_messages(chat_id, history)
+            except Exception as e:
+                log.exception("failed to save messages in finally block", extra={"chat_id": chat_id})
             
-            if isinstance(last_message, dict) and last_message.get("role") == "assistant":
-                content = last_message.get("content", "")
-                if isinstance(content, str):
-                    content = re.sub(r"【[^】]*】", "", content).strip()
-                    last_message = {**last_message, "content": content}
-            
-            history.append(last_message)
-            await store.save_messages(chat_id, history)
             await emit("result", None)
             await queue.put(SENTINEL)
             log.info("chat stream finished", extra={"chat_id": chat_id})

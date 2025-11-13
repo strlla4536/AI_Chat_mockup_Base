@@ -14,11 +14,13 @@
 프로젝트 루트에 `.env` 파일을 생성하고 필요한 환경 변수를 설정하세요:
 
 ```env
-GENOS_URL=your_genos_url
-SERVING_ID=your_serving_id
-GENOS_TOKEN=your_genos_token
-DEFAULT_MODEL=your_default_model
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4o
 ```
+
+**환경 변수 설명:**
+- `OPENAI_API_KEY`: OpenAI API 키 (필수)
+- `OPENAI_MODEL`: 사용할 OpenAI 모델 (선택, 기본값: gpt-4o)
 
 ### 실행 방법
 

@@ -7,10 +7,8 @@ services:
     ports:
       - "6666:6666"
     environment:
-      - GENOS_URL=${GENOS_URL}
-      - SERVING_ID=${SERVING_ID}
-      - GENOS_TOKEN=${GENOS_TOKEN}
-      - DEFAULT_MODEL=${DEFAULT_MODEL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - REDIS_URL=redis://redis:6379/0
       - PORT=6666
     depends_on:

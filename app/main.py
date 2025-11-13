@@ -26,8 +26,8 @@ setup_logging()
 log = get_logger(__name__)
 
 
-app.include_router(health_router)
-app.include_router(chat_router)
+app.include_router(health_router, prefix="/api", tags=["health"])
+app.include_router(chat_router, prefix="/api", tags=["chat"])
 
 
 if __name__ == "__main__":

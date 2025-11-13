@@ -1,10 +1,9 @@
 import os
 import pathlib
 import json
-import requests
 from typing import Any
 from pydantic import BaseModel, Field
-import aiohttp
+from openai import AsyncOpenAI
 
 from app.logger import get_logger
 
@@ -30,25 +29,15 @@ class States:
     tool_results: dict[str, object] = {}
 
 
-def _get_genos_base() -> str:
-    base = os.getenv("GENOS_URL", "").rstrip("/")
-    if not base:
-        raise RuntimeError("GENOS_URL 환경 변수가 설정되지 않았습니다.")
-    return base
+def _get_openai_client() -> AsyncOpenAI:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
+    return AsyncOpenAI(api_key=api_key)
 
 
-def _get_serving_id() -> str:
-    sid = os.getenv("SERVING_ID", "").strip()
-    if not sid:
-        raise RuntimeError("SERVING_ID 환경 변수가 설정되지 않았습니다.")
-    return sid
-
-
-def _get_headers() -> dict:
-    token = os.getenv("GENOS_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("GENOS_TOKEN 환경 변수가 설정되지 않았습니다.")
-    return {"Authorization": f"Bearer {token}"}
+def _get_default_model() -> str:
+    return os.getenv("OPENAI_MODEL", "gpt-4o")
 
 
 async def call_llm_stream(
@@ -59,112 +48,134 @@ async def call_llm_stream(
     **kwargs
 ):
     """
-    GENOS 게이트웨이(servin_api.py 방식)로 스트리밍 호출합니다.
-    OpenAI Chat Completions 호환 스트림을 파싱하여 토큰/툴콜을 동일 포맷으로 내보냅니다.
+    OpenAI API를 사용하여 스트리밍 호출합니다.
+    OpenAI Chat Completions 스트림을 파싱하여 토큰/툴콜을 동일 포맷으로 내보냅니다.
     """
-    base = _get_genos_base()
-    serving_id = _get_serving_id()
-    headers = _get_headers()
-
-    url = f"{base}/api/gateway/rep/serving/{serving_id}/v1/chat/completions"
-    payload: dict[str, Any] = {
-        "messages": messages,
+    client = _get_openai_client()
+    model = model or _get_default_model()
+    
+    # OpenAI API 형식에 맞게 메시지 준비
+    api_messages = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            role = msg.get("role")
+            if role == "tool":
+                # tool 메시지는 tool_call_id가 필요
+                api_msg = {
+                    "role": "tool",
+                    "content": msg.get("content", ""),
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                }
+            else:
+                api_msg = {
+                    "role": role,
+                    "content": msg.get("content", ""),
+                }
+            api_messages.append(api_msg)
+    
+    # OpenAI API 호출 파라미터
+    stream_params: dict[str, Any] = {
+        "model": model,
+        "messages": api_messages,
         "stream": True,
     }
-    if model:
-        payload["model"] = model
+    
     if tools:
-        payload["tools"] = tools
-        # OpenAI 포맷과 동일하게 tool_choice 자동
+        stream_params["tools"] = tools
+        stream_params["tool_choice"] = "auto"
+    
     if temperature is not None:
-        payload["temperature"] = temperature
-    # 기타 kwargs는 무시하거나 필요 시 매핑
+        stream_params["temperature"] = temperature
 
     full_content_parts: list[str] = []
-    full_reasoning_parts: list[str] = []
     tool_call_buf: dict[int, dict] = {}
-
-    timeout = aiohttp.ClientTimeout(total=300)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            resp.raise_for_status()
-            async for raw_line in resp.content:
-                if not raw_line:
-                    continue
-                line = raw_line.decode("utf-8").strip()
-                if not line:
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[len("data:"):].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    data = json.loads(data_str)
-                except Exception:
-                    continue
-                choices = data.get("choices", [])
-                if not choices:
-                    continue
-                delta = choices[0].get("delta", {}) or {}
-
-                # reasoning
-                reasoning_piece = delta.get("reasoning")
-                if reasoning_piece:
-                    full_reasoning_parts.append(reasoning_piece)
-                    yield {
-                        "event": "reasoning_token",
-                        "data": reasoning_piece,
-                    }
-
-                # tool calls (buffer)
-                if "tool_calls" in delta and delta["tool_calls"]:
-                    for i, tc in enumerate(delta["tool_calls"]):
-                        key = tc.get("index", i)
-                        buf = tool_call_buf.setdefault(key, {
-                            "id": None,
-                            "type": "function",
-                            "function": {"name": None, "arguments": ""},
-                        })
-                        if tc.get("id"):
-                            buf["id"] = tc["id"]
-                        fn = tc.get("function") or {}
-                        if fn.get("name"):
-                            buf["function"]["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            buf["function"]["arguments"] += fn["arguments"]
-
-                # content tokens (only when no tool_calls in this delta)
-                if not delta.get("tool_calls") and delta.get("content"):
-                    content_piece = delta.get("content") or ""
-                    if content_piece:
-                        full_content_parts.append(content_piece)
+    
+    try:
+        stream = await client.chat.completions.create(**stream_params)
+        
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+                
+            choice = chunk.choices[0]
+            delta = choice.delta
+            
+            if not delta:
+                continue
+            
+            # tool calls 처리
+            if delta.tool_calls:
+                for tool_call in delta.tool_calls:
+                    if tool_call.index is not None:
+                        idx = tool_call.index
+                        if idx not in tool_call_buf:
+                            tool_call_buf[idx] = {
+                                "id": tool_call.id or "",
+                                "type": "function",
+                                "function": {
+                                    "name": "",
+                                    "arguments": "",
+                                },
+                            }
+                        buf = tool_call_buf[idx]
+                        
+                        if tool_call.id:
+                            buf["id"] = tool_call.id
+                        
+                        if tool_call.function:
+                            if tool_call.function.name:
+                                buf["function"]["name"] = tool_call.function.name
+                            if tool_call.function.arguments:
+                                buf["function"]["arguments"] += tool_call.function.arguments
+            
+            # content tokens 처리
+            # tool_calls가 있는 경우에도 content가 올 수 있음 (예: o1 모델)
+            if delta.content:
+                content_piece = delta.content
+                if content_piece:
+                    full_content_parts.append(content_piece)
+                    # tool_calls가 있으면 토큰을 yield하지 않고 버퍼에만 저장
+                    # tool_calls가 없으면 토큰을 즉시 yield
+                    if not delta.tool_calls:
                         yield {
                             "event": "token",
                             "data": content_piece,
                         }
-
-    final_message: dict[str, Any] = {"role": "assistant"}
-    final_content = "".join(full_content_parts).strip()
-    final_message["content"] = final_content if final_content else ""
-    final_reasoning = "".join(full_reasoning_parts).strip()
-    if final_reasoning:
-        final_message["reasoning"] = final_reasoning
-
-    if tool_call_buf:
-        tool_calls = []
-        for _, tc in sorted(tool_call_buf.items(), key=lambda x: x[0]):
-            tool_calls.append({
-                "id": tc["id"],
-                "type": "function",
-                "function": {
-                    "name": tc["function"]["name"],
-                    "arguments": tc["function"]["arguments"],
-                },
-            })
-        final_message["tool_calls"] = tool_calls
-
-    yield final_message
+        
+        # 최종 메시지 생성
+        final_message: dict[str, Any] = {"role": "assistant"}
+        final_content = "".join(full_content_parts).strip()
+        final_message["content"] = final_content if final_content else ""
+        
+        # tool_calls가 있으면 추가
+        if tool_call_buf:
+            tool_calls = []
+            for idx in sorted(tool_call_buf.keys()):
+                tc = tool_call_buf[idx]
+                # arguments가 JSON 문자열인지 확인
+                try:
+                    # 이미 JSON 문자열이면 그대로 사용
+                    json.loads(tc["function"]["arguments"])
+                    args_str = tc["function"]["arguments"]
+                except (json.JSONDecodeError, TypeError):
+                    # JSON이 아니면 빈 객체로 처리
+                    args_str = "{}"
+                
+                tool_calls.append({
+                    "id": tc["id"],
+                    "type": tc["type"],
+                    "function": {
+                        "name": tc["function"]["name"],
+                        "arguments": args_str,
+                    },
+                })
+            final_message["tool_calls"] = tool_calls
+        
+        yield final_message
+        
+    except Exception as e:
+        log.exception("OpenAI API 호출 실패")
+        raise
 
 
 def is_sse(response):
@@ -179,19 +190,3 @@ def is_sse(response):
         return False
 
 
-def is_valid_model(model: str) -> bool:
-    """
-    GENOS 모델 목록에서 유효성 확인
-    """
-    try:
-        base = _get_genos_base()
-        serving_id = _get_serving_id()
-        headers = _get_headers()
-        url = f"{base}/api/gateway/rep/serving/{serving_id}/v1/models"
-        res = requests.get(url, headers=headers, timeout=15)
-        res.raise_for_status()
-        data = res.json()
-        model_list = [i["id"] for i in data.get("data", [])]
-        return model in model_list if model else False
-    except Exception:
-        return False
