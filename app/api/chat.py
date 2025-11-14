@@ -18,6 +18,7 @@ from app.stores.session_store import SessionStore
 from app.stores.chat_history import ChatHistoryStore
 from app.tools import get_tool_map, get_tools_for_llm
 from app.logger import get_logger
+from app.langgraph_agent import LangGraphSearchAgent
 
 router = APIRouter()
 store = SessionStore()
@@ -295,6 +296,98 @@ async def chat_stream(
 
 
 # ============ LangChain 멀티턴 엔드포인트 ============
+
+
+@router.post("/chat/langgraph")
+async def chat_langgraph(
+    req: GenerateRequest,
+    request: Request
+) -> StreamingResponse:
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    SENTINEL = "__STREAM_DONE__"
+    client_disconnected = asyncio.Event()
+
+    async def emit(event: str, data):
+        payload = {"event": event, "data": data}
+        await queue.put(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n")
+
+    async def heartbeat():
+        while True:
+            if client_disconnected.is_set():
+                break
+            await asyncio.sleep(10)
+            await queue.put(": keep-alive\n\n")
+
+    async def runner():
+        chat_id = req.chatId or uuid4().hex
+        user_id = req.userInfo.get("id") if req.userInfo else None
+
+        try:
+            await emit("token", "")
+
+            history_records = await history_store.get_chat_history(chat_id, limit=10)
+            history_messages = [
+                {"role": msg.get("role", "assistant"), "content": msg.get("content", "")}
+                for msg in history_records
+            ]
+
+            await history_store.save_message(chat_id, "user", req.question)
+
+            agent = LangGraphSearchAgent()
+
+            async def agent_emit(event: str, data):
+                if client_disconnected.is_set():
+                    return
+                await emit(event, data)
+
+            agent.set_emitter(agent_emit)
+
+            final_state = await agent.run(question=req.question, history=history_messages)
+
+            final_answer = final_state.get("final_answer") or ""
+            if final_answer.strip():
+                await history_store.save_message(chat_id, "assistant", final_answer)
+
+            await emit("metadata", {
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "search_iterations": final_state.get("search_iterations", 0),
+                "summaries": final_state.get("search_results_summary", []),
+            })
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception("langgraph chat failed", extra={"chat_id": chat_id})
+            await emit("error", str(e))
+            await emit("token", f"\n\n오류가 발생했습니다: {e}")
+        finally:
+            await emit("result", None)
+            await queue.put(SENTINEL)
+            log.info("langgraph chat finished", extra={"chat_id": chat_id})
+
+    async def sse():
+        producer = asyncio.create_task(runner())
+        pinger = asyncio.create_task(heartbeat())
+        try:
+            while True:
+                if await request.is_disconnected():
+                    client_disconnected.set()
+                    break
+                chunk = await queue.get()
+                if chunk == SENTINEL:
+                    break
+                yield chunk
+        finally:
+            client_disconnected.set()
+            producer.cancel()
+            pinger.cancel()
+
+    return StreamingResponse(
+        sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 @router.post("/chat/multiturn")
 async def chat_multiturn(
