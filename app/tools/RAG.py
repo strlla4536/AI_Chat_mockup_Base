@@ -1,11 +1,35 @@
+import os
+import httpx
+import requests
+import weaviate
+from weaviate.classes.filter import Filter
+from weaviate.classes.query import MetadataQuery
+from weaviate.util import generate_uuid5
+
 class vectordb:
-    def __init__(self, genos_ip:str = "192.168.74.164",
-                 http_port: int = 32208,
-                 grpc_port: int = 32122,
-                 idx:str = None,
-                 embedding_serving_id:int = 10,
-                 embedding_bearer_token:str = '1ed5a9dbe58043219b6c1be758910450',
-                 embedding_genos_url:str = 'https://genos.mnc.ai:3443'):
+    def __init__(self,
+                 genos_ip: str | None = None,
+                 http_port: int | None = None,
+                 grpc_port: int | None = None,
+                 idx: str | None = None,
+                 embedding_serving_id: int | None = None,
+                 embedding_bearer_token: str | None = None,
+                 embedding_genos_url: str | None = None):
+        genos_ip = genos_ip or os.getenv("VDB_HOST", "127.0.0.1")
+        http_port = http_port or int(os.getenv("VDB_HTTP_PORT", "8080"))
+        grpc_port = grpc_port or int(os.getenv("VDB_GRPC_PORT", "50051"))
+        idx = idx or os.getenv("VDB_COLLECTION")
+        embedding_serving_id = embedding_serving_id or int(os.getenv("EMBEDDING_SERVING_ID", "0"))
+        embedding_bearer_token = embedding_bearer_token or os.getenv("EMBEDDING_BEARER_TOKEN", "")
+        embedding_genos_url = embedding_genos_url or os.getenv("GENOS_URL", "https://genos.mnc.ai:3443")
+
+        if not idx:
+            raise ValueError("VDB_COLLECTION must be set via environment variable")
+        if not embedding_serving_id:
+            raise ValueError("EMBEDDING_SERVING_ID must be configured")
+        if not embedding_bearer_token:
+            raise ValueError("EMBEDDING_BEARER_TOKEN must be configured")
+
         try:
             self.client = weaviate.connect_to_custom(
                 http_host=genos_ip,
@@ -16,21 +40,16 @@ class vectordb:
                 grpc_secure=False,
             )
         except Exception as e:
-            print(f'Weaviate 접속 중 오류 발생, 접속 정보를 확인하세요. {e}')
-        self.collection = 'vdb collection이 설정되지 않았습니다.'
-        if not idx:
-            print('벡터 인덱스가 설정되지 않았습니다. 벡터 인덱스를 설정하세요.')
-        else:
-            self.collection = self.client.collections.get(idx)
-            print('VDB를 설정했습니다.')
-            # print('----VDB 내부 property sample 3개----')
-            # for i, obj in enumerate(self.collection.iterator()):
-            #     print(obj.properties['text'])
-            #     if i == 2:
-            #         break
-        print(f'유사도 검색을 위한 임베딩 모델로 {embedding_serving_id}번 임베딩 모델을 사용합니다.')
-        self.emb = embedding_serving(serving_id = embedding_serving_id, bearer_token = embedding_bearer_token,
-                                                   genos_url = embedding_genos_url)
+            raise RuntimeError(f'Weaviate 접속 중 오류 발생: {e}')
+
+        self.collection = self.client.collections.get(idx)
+        print(f'VDB collection `{idx}` 설정 완료')
+
+        self.emb = embedding_serving(
+            serving_id=embedding_serving_id,
+            bearer_token=embedding_bearer_token,
+            genos_url=embedding_genos_url,
+        )
         self.converter = WeaviateGraphQLFilterConverter()
     def dense_search(self, query:str, topk = 4):
         vector = self.emb.call(query)[0]['embedding']
@@ -75,15 +94,23 @@ class vectordb:
     
 
 class embedding_serving:
-        def __init__(self, serving_id:int = 10, bearer_token:str = '1ed5a9dbe58043219b6c1be758910450',
-                    genos_url:str = 'https://genos.mnc.ai:3443'):
+        def __init__(self,
+                     serving_id: int | None = None,
+                     bearer_token: str | None = None,
+                     genos_url: str | None = None):
+            serving_id = serving_id or int(os.getenv("EMBEDDING_SERVING_ID", "0"))
+            bearer_token = bearer_token or os.getenv("EMBEDDING_BEARER_TOKEN")
+            genos_url = genos_url or os.getenv("GENOS_URL", "https://genos.mnc.ai:3443")
+
+            if not serving_id:
+                raise ValueError("EMBEDDING_SERVING_ID must be configured")
+            if not bearer_token:
+                raise ValueError("EMBEDDING_BEARER_TOKEN must be configured")
+
             self.serving_id = serving_id
             self.url = f"{genos_url}/api/gateway/rep/serving/{serving_id}"
-            self.headers = dict(Authorization=f"Bearer {bearer_token}")
-            if serving_id and bearer_token:
-                print(f'embedding model: {serving_id}번과 토큰이 입력되었습니다.')
-            else:
-                print('serving id 혹은 인증키가 입력되지 않았습니다.')
+            self.headers = {"Authorization": f"Bearer {bearer_token}"}
+            print(f"embedding model: {serving_id}번 serving 사용")
         def call(self, question:str = '안녕?'):
             body = {
                 "input" : [question]

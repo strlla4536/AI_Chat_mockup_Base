@@ -20,6 +20,12 @@ services:
       - GENOS_LLM_SERVING_ID=${GENOS_LLM_SERVING_ID}
       - GENOS_BEARER_TOKEN=${GENOS_BEARER_TOKEN}
       - MCP_SERVER_ID=${MCP_SERVER_ID}
+      # Database connection
+      - GENOS_DB_HOST=${GENOS_DB_HOST}
+      - GENOS_DB_PORT=${GENOS_DB_PORT:-3306}
+      - GENOS_DB_USER=${GENOS_DB_USER}
+      - GENOS_DB_PASSWORD=${GENOS_DB_PASSWORD}
+      - GENOS_DB_NAME=${GENOS_DB_NAME}
     volumes:
       - chat_data:/data
     depends_on:
