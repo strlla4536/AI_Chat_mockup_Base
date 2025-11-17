@@ -6,9 +6,10 @@ import { Message } from "@/types/chat";
 interface ChatContainerProps {
   messages: Message[];
   isLoading?: boolean;
+  toolState?: { id_to_iframe?: Record<string, string> };
 }
 
-const ChatContainer = ({ messages, isLoading }: ChatContainerProps) => {
+const ChatContainer = ({ messages, isLoading, toolState }: ChatContainerProps) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -60,6 +61,7 @@ const ChatContainer = ({ messages, isLoading }: ChatContainerProps) => {
                 timestamp={message.timestamp}
                 reasoningSteps={message.reasoningSteps}
                 isThinking={message.isThinking}
+                toolState={toolState}
               />
             ))}
           </div>

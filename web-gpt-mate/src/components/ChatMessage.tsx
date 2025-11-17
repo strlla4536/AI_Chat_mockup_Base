@@ -12,6 +12,7 @@ interface ChatMessageProps {
   timestamp?: Date;
   reasoningSteps?: ReasoningStep[];
   isThinking?: boolean;
+  toolState?: { id_to_iframe?: Record<string, string> };
 }
 
 const stageLabels: Record<string, string> = {
@@ -22,7 +23,7 @@ const stageLabels: Record<string, string> = {
   final: "최종 응답",
 };
 
-const ChatMessage = ({ message, isUser, timestamp, reasoningSteps = [], isThinking = false }: ChatMessageProps) => {
+const ChatMessage = ({ message, isUser, timestamp, reasoningSteps = [], isThinking = false, toolState }: ChatMessageProps) => {
   const [open, setOpen] = useState(false);
   const hasReasoning = reasoningSteps.length > 0;
   const showToggle = !isUser && (isThinking || hasReasoning);
@@ -68,7 +69,7 @@ const ChatMessage = ({ message, isUser, timestamp, reasoningSteps = [], isThinki
           {isUser ? (
             <div className="whitespace-pre-wrap break-words">{message}</div>
           ) : (
-            <MarkdownRenderer content={message} />
+            <MarkdownRenderer content={message} toolState={toolState} />
           )}
         </div>
 

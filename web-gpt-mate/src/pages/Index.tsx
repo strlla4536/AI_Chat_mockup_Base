@@ -16,6 +16,7 @@ const Index = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [toolState, setToolState] = useState<{ id_to_iframe?: Record<string, string> }>({});
   const { toast } = useToast();
   const navigate = useNavigate();
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -223,6 +224,11 @@ const Index = () => {
                 : msg
             )
           );
+        } else if (event.event === "tool_state") {
+          // tool_state 업데이트 (차트, DA 시각화 등)
+          if (event.data && typeof event.data === "object") {
+            setToolState(event.data);
+          }
         } else if (event.event === "metadata") {
           console.debug("LangGraph metadata", event.data);
         } else if (event.event === "error") {
@@ -339,7 +345,7 @@ const Index = () => {
             </div>
           </header>
 
-          <ChatContainer messages={messages} isLoading={isLoadingHistory} />
+          <ChatContainer messages={messages} isLoading={isLoadingHistory} toolState={toolState} />
 
           <ChatInput onSendMessage={handleSendMessage} disabled={isLoading || isLoadingHistory} />
         </div>
