@@ -297,16 +297,26 @@ class LangGraphSearchAgent:
         user_prompt: str,
         temperature: float = 0,
     ) -> str:
-        client = self._client
-        response = await client.chat.completions.create(
+        """간단한 LLM 호출 (GenOS 또는 OpenAI 직접 사용)"""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        
+        # call_llm_stream을 사용하여 GenOS 지원
+        final_message = None
+        async for res in call_llm_stream(
+            messages=messages,
             model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
             temperature=temperature,
-        )
-        return response.choices[0].message.content or ""
+        ):
+            # 최종 메시지만 수집
+            if isinstance(res, dict) and "event" not in res:
+                final_message = res
+        
+        if final_message:
+            return final_message.get("content", "") or ""
+        return ""
 
     async def run(
         self,

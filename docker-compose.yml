@@ -13,6 +13,13 @@ services:
       - PORT=6666
       - DOCKER_ENV=1
       - TAVILY_API_KEY=${TAVILY_API_KEY}
+      # GenOS 리소스 사용
+      - GENOS_ID=${GENOS_ID}
+      - GENOS_PW=${GENOS_PW}
+      - GENOS_URL=${GENOS_URL:-https://genos.mnc.ai:3443}
+      - GENOS_LLM_SERVING_ID=${GENOS_LLM_SERVING_ID}
+      - GENOS_BEARER_TOKEN=${GENOS_BEARER_TOKEN}
+      - MCP_SERVER_ID=${MCP_SERVER_ID}
     volumes:
       - chat_data:/data
     depends_on:

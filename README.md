@@ -40,16 +40,43 @@
 
 프로젝트 루트에 `.env` 파일을 생성하고 필요한 환경 변수를 설정하세요:
 
+**`.env` 파일 생성 방법:**
+```bash
+# env.example 파일을 복사하여 .env 파일 생성
+cp env.example .env
+
+# 또는 직접 생성
+touch .env
+```
+
+그 다음 `.env` 파일을 열어서 실제 값으로 수정하세요:
+
 ```env
+# OpenAI 직접 사용 (GenOS 미사용 시)
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_MODEL=gpt-4o
-TAVILY_API_KEY = your_tavily_api_key
+
+# GenOS 리소스 사용 (권장)
+GENOS_ID=your_genos_user_id
+GENOS_PW=your_genos_password
+GENOS_URL=https://genos.mnc.ai:3443
+GENOS_LLM_SERVING_ID=your_llm_serving_id  # GenOS LLM 서빙 ID (설정 시 GenOS 사용)
+GENOS_BEARER_TOKEN=your_bearer_token  # 선택사항 (없으면 자동 획득)
+MCP_SERVER_ID=3371,other_server_id  # MCP 서버 ID 목록 (쉼표로 구분)
+
+# 기타
+TAVILY_API_KEY=your_tavily_api_key  # 검색 도구
 ```
 
 **환경 변수 설명:**
-- `OPENAI_API_KEY`: OpenAI API 키 (필수)
-- `OPENAI_MODEL`: 사용할 OpenAI 모델 (선택, 기본값: gpt-4o)
-- `TAVILY_API_KEY` : 검색 도구 (필수)
+- `OPENAI_API_KEY`: OpenAI API 키 (GenOS 미사용 시 필수)
+- `OPENAI_MODEL`: 사용할 모델명 (기본값: gpt-4o)
+- `GENOS_ID`, `GENOS_PW`: GenOS 인증 정보 (GenOS 사용 시 필수)
+- `GENOS_URL`: GenOS API URL (기본값: https://genos.mnc.ai:3443)
+- `GENOS_LLM_SERVING_ID`: GenOS LLM 서빙 ID (설정 시 GenOS를 통해 OpenRouter 모델 사용)
+- `GENOS_BEARER_TOKEN`: GenOS Bearer 토큰 (선택사항, 없으면 자동 획득)
+- `MCP_SERVER_ID`: MCP 서버 ID 목록 (쉼표로 구분, 예: "3371,143")
+- `TAVILY_API_KEY`: 검색 도구 API 키 (필수)
 
 ### 실행 방법
 
@@ -71,17 +98,45 @@ TAVILY_API_KEY = your_tavily_api_key
 
 4. **서비스 중지**
    ```bash
+   # 서비스 완전 중지 및 컨테이너 제거 (권장)
    docker-compose down
+   
+   # 서비스 중지 및 볼륨까지 삭제 (데이터 완전 삭제)
+   docker-compose down -v
    ```
 
-5. **서비스 중지 및 볼륨 삭제**
+5. **서비스 일시 중지 (재시작 가능)**
    ```bash
-   docker-compose down -v
+   # 모든 서비스 일시 중지 (컨테이너는 유지)
+   docker-compose stop
+   
+   # 특정 서비스만 중지
+   docker-compose stop api
+   docker-compose stop frontend
+   docker-compose stop redis
+   
+   # 일시 중지된 서비스 재시작
+   docker-compose start
    ```
 
 6. **이미지 재빌드 후 실행**
    ```bash
    docker-compose up -d --build
+   ```
+
+7. **실행 중인 서비스 상태 확인**
+   ```bash
+   docker-compose ps
+   ```
+
+8. **서비스 로그 실시간 확인**
+   ```bash
+   # 모든 서비스 로그
+   docker-compose logs -f
+   
+   # 특정 서비스 로그만
+   docker-compose logs -f api
+   docker-compose logs -f frontend
    ```
 
 ### 접속 정보
