@@ -1,7 +1,7 @@
 import os
 import pathlib
 import json
-from typing import Any
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 import aiohttp
 
@@ -20,13 +20,40 @@ class ToolState(BaseModel):
     id_to_iframe: dict[str, str] = Field(default_factory=dict)
 
 
+class SharedState(BaseModel):
+    current_date: Optional[str] = None
+    file_check: bool = False
+    upload_res: Optional[dict[str, Any]] = None
+    db_connection_checked: bool = False
+    db_connection_error: Optional[str] = None
+
+
+class DataAnalysisState(BaseModel):
+    route_type: Optional[str] = None
+    rdb_schema: Optional[Any] = None
+    sql_query: Optional[str] = None
+    sql_history: List[str] = Field(default_factory=list)
+    sql_result: Optional[dict[str, Any]] = None
+    chart_type: Optional[str] = None
+    data_format: Optional[str] = None
+    chart_data: Optional[dict[str, Any]] = None
+    chart_resource_id: Optional[str] = None
+    chart_feedback: Optional[str] = None
+    sql_error: Optional[str] = None
+    chart_validation_result: Optional[dict[str, Any]] = None
+    report_markdown: Optional[str] = None
+
+
 class States:
-    user_id: str = None
-    messages: list[dict]
-    turn: int = 0
-    tools: list[dict] = []
-    tool_state: ToolState = ToolState()
-    tool_results: dict[str, object] = {}
+    def __init__(self) -> None:
+        self.user_id: Optional[str] = None
+        self.messages: List[dict] = []
+        self.turn: int = 0
+        self.tools: List[dict] = []
+        self.tool_state: ToolState = ToolState()
+        self.tool_results: dict[str, object] = {}
+        self.shared: SharedState = SharedState()
+        self.da: DataAnalysisState = DataAnalysisState()
 
 
 def _get_genos_token() -> str:
