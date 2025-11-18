@@ -92,6 +92,14 @@ async def _ensure_pool() -> aiomysql.Pool:
         maxsize=int(os.getenv("GENOS_DB_POOL_MAX", "5")),
         ssl=cfg["ssl"],
     )
+    log.info(
+        "MySQL connection pool created",
+        extra={
+            "host": cfg["host"],
+            "port": cfg["port"],
+            "database": cfg["database"],
+        },
+    )
     return _DB_POOL
 
 
@@ -136,6 +144,11 @@ async def execute_sql(states: States, **tool_input) -> Dict[str, Any]:
         col: [row.get(col) for row in rows]
         for col in columns
     } if columns else {}
+
+    log.info(
+        "SQL query executed successfully",
+        extra={"row_count": len(rows)},
+    )
 
     result_payload = {
         "success": True,
@@ -225,6 +238,11 @@ async def describe_schema(states: States, **tool_input) -> Dict[str, Any]:
     if params.sample_rows > 0:
         for table, rows in samples.items():
             schema.setdefault(table, {})["sample_rows"] = rows
+
+    log.info(
+        "Schema described successfully",
+        extra={"table_count": len(schema)},
+    )
 
     return {
         "success": True,

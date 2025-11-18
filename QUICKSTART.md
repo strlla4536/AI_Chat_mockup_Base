@@ -8,8 +8,23 @@ cd /Users/sangmin/Desktop/personal/mockup/AI_Chat_mockup_Base
 
 # .env 파일 생성
 cat > .env << EOF
-OPENAI_API_KEY=sk-your-api-key-here
-OPENAI_MODEL=gpt-4o
+GENOS_ID=your_genos_user_id
+GENOS_PW=your_genos_password
+GENOS_URL=https://genos.mnc.ai:3443
+GENOS_LLM_SERVING_ID=your_llm_serving_id
+GENOS_BEARER_TOKEN=optional_bearer_token
+GENOS_LLM_MODEL_NAME=optional_model_name_for_logs
+MCP_SERVER_ID=91
+
+# DB 연결 정보 (필요 시)
+GENOS_DB_HOST=dwmyoung-mysql9.mysql.database.azure.com
+GENOS_DB_PORT=3306
+GENOS_DB_USER=dwmyoung
+GENOS_DB_PASSWORD=********
+GENOS_DB_NAME=db_template
+
+# 기타 도구
+TAVILY_API_KEY=your_tavily_key
 EOF
 ```
 

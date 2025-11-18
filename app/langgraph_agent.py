@@ -12,7 +12,6 @@ from app.tools.web_search import web_search
 from app.utils import (
     ROOT_DIR,
     _get_default_model,
-    _get_openai_client,
     call_llm_stream,
     States,
     ToolState,
@@ -45,7 +44,6 @@ class LangGraphSearchAgent:
         emitter: Optional[Emitter] = None,
     ) -> None:
         self.model = model or _get_default_model()
-        self._client = _get_openai_client()
         self._graph = self._build_graph()
         self._emitter: Optional[Emitter] = emitter
 
@@ -488,7 +486,7 @@ class LangGraphSearchAgent:
 
         system_prompt = (
             "당신은 데이터 분석 보고서를 작성하는 전문가입니다. "
-            "아래 마크다운 템플릿 구조를 정확히 따르되, 제목과 구분선(---), 표 형식은 변경하지 마십시오. "
+            "사용자 요청을 분석하여 데이터분석이 필요한 경우, 아래 마크다운 템플릿 구조를 정확히 따르시오. "
             "각 섹션의 본문을 실제 내용으로 채워 넣고, 불필요한 설명을 덧붙이지 마세요.\n"
             "# 1. 사용자의 질문 분석 및 요약\n"
             "여기에 질문 요약을 작성하세요.\n"
@@ -499,10 +497,7 @@ class LangGraphSearchAgent:
             "```\n"
             "---\n"
             "# 3. SQL 쿼리 결과 (쿼리 실행 결과)\n"
-            "| 지역단조직번호 | 건수 |\n"
-            "|---------------|------|\n"
             "SQL 결과를 Markdown 표 행으로 작성하세요. 결과가 없으면 '데이터 없음'이라고 적으세요.\n"
-            "> ✅ 결과는 최대 10건 요청이었으나, 반환된 데이터는 X건입니다.\n"
             "---\n"
             "# 4. 결과 시각화\n"
             "iframe HTML 또는 마크다운 이미지 링크를 제공하세요. 없으면 '시각화 리소스 없음'이라고 명시하세요.\n"

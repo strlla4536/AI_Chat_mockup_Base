@@ -3,7 +3,6 @@ import pathlib
 import json
 from typing import Any
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
 import aiohttp
 
 from app.logger import get_logger
@@ -59,16 +58,15 @@ async def _get_genos_token_async() -> str:
             return data["data"]["access_token"]
 
 
-def _get_openai_client() -> AsyncOpenAI:
-    """OpenAI 클라이언트 반환 (GenOS 미사용 시)"""
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-    return AsyncOpenAI(api_key=api_key)
-
-
 def _get_default_model() -> str:
-    return os.getenv("OPENAI_MODEL", "gpt-4o")
+    """
+    로깅 및 메타데이터에 사용할 모델명을 반환합니다.
+    """
+    configured = os.getenv("GENOS_LLM_MODEL_NAME", "").strip()
+    if configured:
+        return configured
+    serving_id = os.getenv("GENOS_LLM_SERVING_ID", "").strip() or "unknown"
+    return f"genos_serving_{serving_id}"
 
 
 def _use_genos_llm() -> bool:
@@ -79,7 +77,7 @@ def _use_genos_llm() -> bool:
     if use_genos:
         log.info(f"GenOS LLM 서빙 사용: serving_id={serving_id}")
     else:
-        log.info("OpenAI 직접 호출 사용 (GENOS_LLM_SERVING_ID가 설정되지 않음)")
+        log.error("GENOS_LLM_SERVING_ID가 설정되지 않았습니다.")
     return use_genos
 
 
@@ -109,144 +107,14 @@ async def call_llm_stream(
     **kwargs
 ):
     """
-    LLM 스트리밍 호출 (GenOS 또는 OpenAI 직접 사용)
-    GenOS LLM 서빙이 설정되어 있으면 GenOS를 통해 호출하고,
-    그렇지 않으면 OpenAI API를 직접 사용합니다.
+    GenOS Gateway를 통해 LLM 스트리밍 호출을 수행합니다.
     """
-    # GenOS LLM 서빙 사용 여부 확인
-    if _use_genos_llm():
-        log.info("GenOS를 통해 LLM 호출 시작")
-        async for item in _call_genos_llm_stream(messages, model, tools, temperature, **kwargs):
-            yield item
-        return
-    
-    # 기존 OpenAI 직접 호출
-    log.info("OpenAI API 직접 호출 (GenOS 미사용)")
-    client = _get_openai_client()
-    model = model or _get_default_model()
-    
-    # OpenAI API 형식에 맞게 메시지 준비
-    api_messages = []
-    for msg in messages:
-        if isinstance(msg, dict):
-            role = msg.get("role")
-            if role == "tool":
-                # tool 메시지는 tool_call_id가 필요
-                api_msg = {
-                    "role": "tool",
-                    "content": msg.get("content", ""),
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                }
-            else:
-                api_msg = {
-                    "role": role,
-                    "content": msg.get("content", ""),
-                }
-            api_messages.append(api_msg)
-    
-    # OpenAI API 호출 파라미터
-    stream_params: dict[str, Any] = {
-        "model": model,
-        "messages": api_messages,
-        "stream": True,
-    }
-    
-    if tools:
-        stream_params["tools"] = tools
-        stream_params["tool_choice"] = "auto"
-    
-    if temperature is not None:
-        stream_params["temperature"] = temperature
+    if not _use_genos_llm():
+        raise RuntimeError("GENOS_LLM_SERVING_ID 환경 변수를 설정해야 합니다.")
 
-    full_content_parts: list[str] = []
-    tool_call_buf: dict[int, dict] = {}
-    
-    try:
-        stream = await client.chat.completions.create(**stream_params)
-        
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-                
-            choice = chunk.choices[0]
-            delta = choice.delta
-            
-            if not delta:
-                continue
-            
-            # tool calls 처리
-            if delta.tool_calls:
-                for tool_call in delta.tool_calls:
-                    if tool_call.index is not None:
-                        idx = tool_call.index
-                        if idx not in tool_call_buf:
-                            tool_call_buf[idx] = {
-                                "id": tool_call.id or "",
-                                "type": "function",
-                                "function": {
-                                    "name": "",
-                                    "arguments": "",
-                                },
-                            }
-                        buf = tool_call_buf[idx]
-                        
-                        if tool_call.id:
-                            buf["id"] = tool_call.id
-                        
-                        if tool_call.function:
-                            if tool_call.function.name:
-                                buf["function"]["name"] = tool_call.function.name
-                            if tool_call.function.arguments:
-                                buf["function"]["arguments"] += tool_call.function.arguments
-            
-            # content tokens 처리
-            # tool_calls가 있는 경우에도 content가 올 수 있음 (예: o1 모델)
-            if delta.content:
-                content_piece = delta.content
-                if content_piece:
-                    full_content_parts.append(content_piece)
-                    # tool_calls가 있으면 토큰을 yield하지 않고 버퍼에만 저장
-                    # tool_calls가 없으면 토큰을 즉시 yield
-                    if not delta.tool_calls:
-                        yield {
-                            "event": "token",
-                            "data": content_piece,
-                        }
-        
-        # 최종 메시지 생성
-        final_message: dict[str, Any] = {"role": "assistant"}
-        final_content = "".join(full_content_parts).strip()
-        final_message["content"] = final_content if final_content else ""
-        
-        # tool_calls가 있으면 추가
-        if tool_call_buf:
-            tool_calls = []
-            for idx in sorted(tool_call_buf.keys()):
-                tc = tool_call_buf[idx]
-                # arguments가 JSON 문자열인지 확인
-                try:
-                    # 이미 JSON 문자열이면 그대로 사용
-                    json.loads(tc["function"]["arguments"])
-                    args_str = tc["function"]["arguments"]
-                except (json.JSONDecodeError, TypeError):
-                    # JSON이 아니면 빈 객체로 처리
-                    args_str = "{}"
-                
-                tool_calls.append({
-                    "id": tc["id"],
-                    "type": tc["type"],
-                    "function": {
-                        "name": tc["function"]["name"],
-                        "arguments": args_str,
-                    },
-                })
-            final_message["tool_calls"] = tool_calls
-        
-        yield final_message
-        
-    except Exception as e:
-        log.exception("OpenAI API 호출 실패")
-        raise
+    log.info("GenOS를 통해 LLM 호출 시작")
+    async for item in _call_genos_llm_stream(messages, model, tools, temperature, **kwargs):
+        yield item
 
 
 async def _call_genos_llm_stream(
@@ -400,7 +268,9 @@ async def _call_genos_llm_stream(
                                         if 'name' in func_delta:
                                             buf["function"]["name"] = func_delta['name']
                                         if 'arguments' in func_delta:
-                                            buf["function"]["arguments"] += func_delta['arguments']
+                                            arguments_piece = func_delta.get('arguments') or ""
+                                            if arguments_piece:
+                                                buf["function"]["arguments"] += arguments_piece
                             
                             # content tokens 처리
                             if 'content' in delta and delta['content']:

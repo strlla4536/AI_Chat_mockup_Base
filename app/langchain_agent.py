@@ -1,56 +1,33 @@
 """
 간단한 멀티턴 대화 Agent
-LangChain을 사용하여 OpenAI API와 멀티턴 대화 및 스트리밍을 지원합니다.
+LangChain 대신 공통 스트리밍 헬퍼(`call_llm_stream`)를 사용하여 GenOS LLM 서빙과 통신합니다.
 툴 실행(함수 호출)은 에이전트 내부에서 수행하지 않고 ToolHandler 같은 외부 컴포넌트로 위임합니다.
 """
-import os
 from typing import Optional, List, Tuple, Callable, Awaitable
 from datetime import datetime
 
-# ChatOpenAI may not be available in all langchain versions; import optionally
-try:
-    from langchain.chat_models import ChatOpenAI  # type: ignore
-    _HAS_LANGCHAIN_CHAT = True
-except Exception:
-    ChatOpenAI = None  # type: ignore
-    _HAS_LANGCHAIN_CHAT = False
-
 from app.logger import get_logger
 from app.stores.chat_history import ChatHistoryStore
+from app.utils import _get_default_model
 
 log = get_logger(__name__)
 history_store = ChatHistoryStore()
 
 
 class LangChainAgent:
-    """멀티턴 대화 Agent (LangChain 사용) - 스트리밍 유지, 툴 실행 분리"""
+    """멀티턴 대화 Agent - 스트리밍 유지, 툴 실행 분리"""
     
-    def __init__(self, model: str = "gpt-4", temperature: float = 0.2, max_history: int = 10):
+    def __init__(self, model: Optional[str] = None, temperature: float = 0.2, max_history: int = 10):
         """
         Args:
-            model: OpenAI 모델 이름
+            model: 사용할 모델명 (미지정 시 환경값 사용)
             temperature: 생성 온도
             max_history: 멀티턴 윈도우 크기 (기본값: 10)
         """
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-        
-        # Prefer LangChain's ChatOpenAI when available; otherwise rely on call_llm_stream helper
-        if _HAS_LANGCHAIN_CHAT and ChatOpenAI is not None:
-            try:
-                self.client = ChatOpenAI(model=model, temperature=temperature, openai_api_key=api_key)
-            except Exception:
-                log.warning("Failed to initialize ChatOpenAI; falling back to streaming helper")
-                self.client = None
-        else:
-            log.warning("ChatOpenAI not available in the installed langchain package; using streaming helper only")
-            self.client = None
-
+        self.model = model or _get_default_model()
+        self.temperature = temperature
         self.max_history = max_history
         self.system_prompt = self._load_system_prompt()
-        self.model = model
-        self.temperature = temperature
         # ToolHandler is created so external code can register tools via agent.add_tools/add_tool
         self.tool_handler = ToolHandler()
     

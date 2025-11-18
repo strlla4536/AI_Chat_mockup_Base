@@ -52,16 +52,13 @@ touch .env
 그 다음 `.env` 파일을 열어서 실제 값으로 수정하세요:
 
 ```env
-# OpenAI 직접 사용 (GenOS 미사용 시)
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4o
-
-# GenOS 리소스 사용 (권장)
+# GenOS 리소스 사용 (필수)
 GENOS_ID=your_genos_user_id
 GENOS_PW=your_genos_password
 GENOS_URL=https://genos.mnc.ai:3443
 GENOS_LLM_SERVING_ID=your_llm_serving_id  # GenOS LLM 서빙 ID (설정 시 GenOS 사용)
 GENOS_BEARER_TOKEN=your_bearer_token      # 선택사항 (없으면 자동 획득)
+GENOS_LLM_MODEL_NAME=Qwen3-235B-A22B-Instruct-2507  # 선택사항 (로그 표시용)
 MCP_SERVER_ID=3371,other_server_id        # MCP 서버 ID 목록 (쉼표로 구분)
 
 # 데이터베이스 연결 (시각화용 MySQL 등)
@@ -87,12 +84,11 @@ TAVILY_API_KEY=your_tavily_api_key    # 검색 도구
 ```
 
 **환경 변수 설명:**
-- `OPENAI_API_KEY`: OpenAI API 키 (GenOS 미사용 시 필수)
-- `OPENAI_MODEL`: 사용할 모델명 (기본값: gpt-4o)
 - `GENOS_ID`, `GENOS_PW`: GenOS 인증 정보 (GenOS 사용 시 필수)
 - `GENOS_URL`: GenOS API URL (기본값: https://genos.mnc.ai:3443)
 - `GENOS_LLM_SERVING_ID`: GenOS LLM 서빙 ID (설정 시 GenOS를 통해 OpenRouter 모델 사용)
 - `GENOS_BEARER_TOKEN`: GenOS Bearer 토큰 (선택사항, 없으면 자동 획득)
+- `GENOS_LLM_MODEL_NAME`: 로그에 표시할 모델명(선택, 미설정 시 `genos_serving_<ID>`)
 - `MCP_SERVER_ID`: MCP 서버 ID 목록 (쉼표로 구분, 예: "3371,143")
 - `GENOS_DB_HOST` ~ `GENOS_DB_NAME`: 시각화용 MySQL 등 관계형 DB 연결 정보
 - `GENOS_DB_SSL_MODE`, `GENOS_DB_SSL_CA`: TLS가 필요한 DB 환경에서 사용 (선택)
